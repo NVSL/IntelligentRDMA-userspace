@@ -17,7 +17,8 @@
 #define RX_DEPTH 500
 #define GIDX 1
 #define SERVER_IP ("192.168.1.11")
-const unsigned PORT = 18515;
+#define PORT 18515
+#define IB_PORT 1
 
 static void prepare_qp_for_send_recv(
     struct ibv_qp* qp,
@@ -40,7 +41,7 @@ static void prepare_qp_for_send_recv(
       .dlid = rem_lid,
       .sl = 0,
       .src_path_bits = 0,
-      .port_num = PORT
+      .port_num = IB_PORT
     }
   };
   if(rem_ibv_gid->global.interface_id) {
@@ -97,10 +98,10 @@ static void initializeConnection(
   int rem_lid, rem_qpn, rem_psn;
   union ibv_gid my_ibv_gid, rem_ibv_gid;
 
-  if(ibv_query_port(context, PORT, &port_attr)) ERROR("Failed to get port info\n")
+  if(ibv_query_port(context, IB_PORT, &port_attr)) ERROR("Failed to get port info\n")
   my_lid = port_attr.lid;
   if(port_attr.link_layer != IBV_LINK_LAYER_ETHERNET && !my_lid) ERROR("Failed to get local LID\n")
-  if(ibv_query_gid(context, PORT, GIDX, &my_ibv_gid)) ERROR("Failed to read sgid of index %d\n", GIDX)
+  if(ibv_query_gid(context, IB_PORT, GIDX, &my_ibv_gid)) ERROR("Failed to read sgid of index %d\n", GIDX)
   my_qpn = qp->qp_num;
   srand48(getpid() * time(NULL));
   my_psn = lrand48() & 0xffffff;
@@ -158,7 +159,7 @@ static void initializeConnection(
       rem_lid, rem_qpn, rem_psn, rem_wgid);
   if(!server) prepare_qp_for_send_recv(qp, my_psn, rem_lid, rem_qpn, rem_psn, mtu, &rem_ibv_gid);
 }
-   
+
 int main(int argc, char* argv[]) {
   struct ibv_device** dev_list;
   struct ibv_device* ibv_dev;
@@ -186,6 +187,7 @@ int main(int argc, char* argv[]) {
   if(!dev_list) ERROR("Failed to get device list\n")
   ibv_dev = *dev_list;
   if(!ibv_dev) ERROR("No devices in list\n")
+  printf("Found (and using) IB device %s\n", ibv_get_device_name(ibv_dev));
   context = ibv_open_device(ibv_dev);
   if(!context) ERROR("Failed to get context for %s\n", ibv_get_device_name(ibv_dev))
   pd = ibv_alloc_pd(context);
@@ -197,6 +199,7 @@ int main(int argc, char* argv[]) {
 
   // Create QP
   {
+    struct ibv_qp_attr attr;
     struct ibv_qp_init_attr init_attr = {
       .send_cq = cq,
       .recv_cq = cq,
@@ -208,17 +211,20 @@ int main(int argc, char* argv[]) {
       },
       .qp_type = IBV_QPT_RC
     };
-    struct ibv_qp_attr attr;
     qp = ibv_create_qp(pd, &init_attr);
     if(!qp) ERROR("Failed to create QP\n")
     ibv_query_qp(qp, &attr, IBV_QP_CAP, &init_attr);
     if(init_attr.cap.max_inline_data >= BUF_SIZE_BYTES) {
       send_flags |= IBV_SEND_INLINE;
     }
-    attr.qp_state = IBV_QPS_INIT;
-    attr.pkey_index = 0;
-    attr.port_num = PORT;
-    attr.qp_access_flags = 0;
+  }
+  {
+    struct ibv_qp_attr attr = {
+      .qp_state = IBV_QPS_INIT,
+      .pkey_index = 0,
+      .port_num = IB_PORT,
+      .qp_access_flags = 0
+    };
     if(ibv_modify_qp(qp, &attr, IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS)) ERROR("Failed to modify QP to INIT\n")
   }
 
