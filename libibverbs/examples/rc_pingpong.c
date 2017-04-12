@@ -50,6 +50,8 @@
 
 #include <ccan/minmax.h>
 
+#include <x86intrin.h>  // __rdtsc()
+
 enum {
 	PINGPONG_RECV_WRID = 1,
 	PINGPONG_SEND_WRID = 2,
@@ -577,6 +579,24 @@ static int pp_post_send(struct pingpong_context *ctx)
 	return ibv_post_send(ctx->qp, &wr, &bad_wr);
 }
 
+static int pp_post_send_custom(struct pingpong_context *ctx) {
+  struct ibv_sge list = {
+    .addr   = (uintptr_t) ctx->buf,
+    .length = ctx->size,
+    .lkey   = ctx->mr->lkey
+  };
+  struct ibv_send_wr wr = {
+    .wr_id      = 0x22,  // arbitrary
+    .sg_list    = &list,
+    .num_sge    = 1,
+    .opcode     = 0x10,  // IRDMA_WR_CUSTOM
+    .send_flags = ctx->send_flags,
+  };
+  struct ibv_send_wr *bad_wr;
+
+  return ibv_post_send(ctx->qp, &wr, &bad_wr);
+}
+
 struct ts_params {
 	uint64_t		 comp_recv_max_time_delta;
 	uint64_t		 comp_recv_min_time_delta;
@@ -1008,6 +1028,13 @@ int main(int argc, char *argv[])
 		perror("gettimeofday");
 		return 1;
 	}
+
+    {
+      int err = pp_post_send_custom(ctx);
+      if(err) printf("Error %d posting custom send\n", err);
+      uint64_t t = __rdtsc();
+      while(__rdtsc() < t + 10000000);  // busy wait for custom packet to roundtrip
+    }
 
 	{
 		float usec = (end.tv_sec - start.tv_sec) * 1000000 +
