@@ -108,8 +108,8 @@ static void initializeConnection(
   inet_ntop(AF_INET6, &my_ibv_gid, my_wgid, sizeof(my_wgid));
   printf("  local address:  LID 0x%04x, QPN 0x%06x, PSN 0x%06x, GID %s\n",
       my_lid, my_qpn, my_psn, my_wgid);
-    if(asprintf(&service, "%d", PORT) < 0) ERROR("Failed asprintf\n")
-  n = getaddrinfo(NULL, service, &hints, &res);
+  if(asprintf(&service, "%d", PORT) < 0) ERROR("Failed asprintf\n")
+  n = getaddrinfo(server ? NULL : SERVER_IP, service, &hints, &res);
   if(n < 0) ERROR("%s for port %d\n", gai_strerror(n), PORT)
   for(t = res; t; t = t->ai_next) {
     sockfd = socket(t->ai_family, t->ai_socktype, t->ai_protocol);
