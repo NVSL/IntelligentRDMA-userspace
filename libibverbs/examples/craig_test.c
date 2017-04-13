@@ -228,6 +228,16 @@ int main(int argc, char* argv[]) {
     if(ibv_modify_qp(qp, &attr, IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS)) ERROR("Failed to modify QP to INIT\n")
   }
 
+  // initialize buffer
+  {
+    int i;
+#define SERVER_DATA (0x51)
+#define CLIENT_DATA (0x7a)
+    for(i = 0; i < BUF_SIZE_BYTES/sizeof(int); i++) {
+      buf[i] = server ? SERVER_DATA : CLIENT_DATA;
+    }
+  }
+
   // post receive
   {
     struct ibv_sge sge_list = {
@@ -247,10 +257,6 @@ int main(int argc, char* argv[]) {
   // initialize connection
   initializeConnection(context, qp, server);
 
-#define SERVER_DATA (0x51)
-#define CLIENT_DATA (0x7a)
-  memset(buf, server ? SERVER_DATA : CLIENT_DATA, BUF_SIZE_BYTES);
-
   // post send
   {
     struct ibv_sge sge_list = {
@@ -269,12 +275,13 @@ int main(int argc, char* argv[]) {
     if(ibv_post_send(qp, &send_wr, &bad_send_wr)) ERROR("Failed to post send\n")
   }
 
-  // wait for completion, and confirm correct data received
+  // wait for completions, and confirm correct data received
   {
     int ne, i;
     struct ibv_wc wc[2];
-    bool received = false;
-    while(!received) {
+    unsigned completions = 0;
+#define COMPLETIONS_NEEDED 2
+    while(completions < COMPLETIONS_NEEDED) {
       do {
         ne = ibv_poll_cq(cq, 2, wc);
         if(ne < 0) ERROR("Failed to poll CQ\n")
@@ -284,12 +291,12 @@ int main(int argc, char* argv[]) {
         int wr_id = (int)wc[i].wr_id;
         if(status != IBV_WC_SUCCESS) ERROR("Failed status %s (%d) for wr_id %d\n",
             ibv_wc_status_str(status), status, wr_id)
-        if(wr_id == 1) received = true;
+        completions++;
       }
     }
     for(i = 4; i < 8; i++) {
       int expected_data = server ? CLIENT_DATA : SERVER_DATA;
-      if(buf[i] != expected_data) ERROR("Received data %i in position %i; expected %i\n",
+      if(buf[i] != expected_data) ERROR("Received data 0x%x in position %i; expected 0x%x\n",
           buf[i], i, expected_data)
     }
   }
