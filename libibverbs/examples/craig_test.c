@@ -160,6 +160,31 @@ static void initializeConnection(
   if(!server) prepare_qp_for_send_recv(qp, my_psn, rem_lid, rem_qpn, rem_psn, mtu, &rem_ibv_gid);
 }
 
+// If one of the completions contains an immediate value, that value will be returned
+// If more than one of the completions do, one value will be chosen in an unspecified manner
+// If none do, the value 0 will be returned
+uint32_t waitForCompletions(unsigned howMany, struct ibv_cq* cq) {
+  int ne, i;
+  struct ibv_wc wc[howMany];
+  unsigned completions = 0;
+  uint32_t retval = 0;
+  while(completions < howMany) {
+    do {
+      ne = ibv_poll_cq(cq, 2, wc);
+      if(ne < 0) ERROR("Failed to poll CQ\n")
+    } while (ne < 1);
+    for(i = 0; i < ne; ++i) {
+      enum ibv_wc_status status = wc[i].status;
+      int wr_id = (int)wc[i].wr_id;
+      if(status != IBV_WC_SUCCESS) ERROR("Failed status %s (%d) for wr_id %d\n",
+          ibv_wc_status_str(status), status, wr_id)
+      completions++;
+      if(wc[i].wc_flags & IBV_WC_WITH_IMM) retval = wc[i].imm_data;
+    }
+  }
+  return retval;
+}
+
 int main(int argc, char* argv[]) {
   struct ibv_device** dev_list;
   struct ibv_device* ibv_dev;
@@ -277,28 +302,69 @@ int main(int argc, char* argv[]) {
 
   // wait for completions, and confirm correct data received
   {
-    int ne, i;
-    struct ibv_wc wc[2];
-    unsigned completions = 0;
-#define COMPLETIONS_NEEDED 2
-    while(completions < COMPLETIONS_NEEDED) {
-      do {
-        ne = ibv_poll_cq(cq, 2, wc);
-        if(ne < 0) ERROR("Failed to poll CQ\n")
-      } while (ne < 1);
-      for(i = 0; i < ne; ++i) {
-        enum ibv_wc_status status = wc[i].status;
-        int wr_id = (int)wc[i].wr_id;
-        if(status != IBV_WC_SUCCESS) ERROR("Failed status %s (%d) for wr_id %d\n",
-            ibv_wc_status_str(status), status, wr_id)
-        completions++;
-      }
-    }
+    int i;
+    waitForCompletions(2, cq);
     for(i = 4; i < 8; i++) {
       int expected_data = server ? CLIENT_DATA : SERVER_DATA;
       if(buf[i] != expected_data) ERROR("Received data 0x%x in position %i; expected 0x%x\n",
           buf[i], i, expected_data)
     }
+  }
+
+  // next round: inc everything in buffer
+  {
+    int i;
+    for(i = 0; i < BUF_SIZE_BYTES/sizeof(int); i++) {
+      buf[i]++;
+    }
+  }
+
+  // post next receive
+  {
+    struct ibv_sge sge_list = {
+      .addr = (uintptr_t)(&buf[4]),
+      .length = 4*sizeof(int),
+      .lkey = mr->lkey
+    };
+    struct ibv_recv_wr recv_wr = {
+      .wr_id = 1,
+      .sg_list = &sge_list,
+      .num_sge = 1,
+    };
+    struct ibv_recv_wr* bad_recv_wr;
+    if(ibv_post_recv(qp, &recv_wr, &bad_recv_wr)) ERROR("Failed to post receive\n")
+  }
+
+  // post send with immediate
+#define IMM_DATA 5
+  {
+    struct ibv_sge sge_list = {
+      .addr = (uintptr_t)buf,
+      .length = 4*sizeof(int),
+      .lkey = mr->lkey
+    };
+    struct ibv_send_wr send_wr = {
+      .wr_id = 2,
+      .sg_list = &sge_list,
+      .num_sge = 1,
+      .opcode = IBV_WR_SEND_WITH_IMM,
+      .send_flags = send_flags,
+      .imm_data = IMM_DATA,
+    };
+    struct ibv_send_wr* bad_send_wr;
+    if(ibv_post_send(qp, &send_wr, &bad_send_wr)) ERROR("Failed to post send\n")
+  }
+
+  // wait for completions, and confirm correct data received
+  {
+    int i;
+    uint32_t imm = waitForCompletions(2, cq);
+    for(i = 4; i < 8; i++) {
+      int expected_data = server ? CLIENT_DATA+1 : SERVER_DATA+1;
+      if(buf[i] != expected_data) ERROR("Received data 0x%x in position %i; expected 0x%x\n",
+          buf[i], i, expected_data)
+    }
+    if(imm != IMM_DATA) ERROR("Received imm_data %u, expected %u\n", imm, IMM_DATA)
   }
 
   printf("All tests successful.\n");
