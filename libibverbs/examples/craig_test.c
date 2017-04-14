@@ -160,8 +160,8 @@ static void initializeConnection(
   if(!server) prepare_qp_for_send_recv(qp, my_psn, rem_lid, rem_qpn, rem_psn, mtu, &rem_ibv_gid);
 }
 
-// If one of the completions contains an immediate value, that value will be returned
-// If more than one of the completions do, one value will be chosen in an unspecified manner
+// If one of the (recv) completions contains an immediate value, that value will be returned
+// If more than one of the (recv) completions do, one value will be chosen in an unspecified manner
 // If none do, the value 0 will be returned
 uint32_t waitForCompletions(unsigned howMany, struct ibv_cq* cq) {
   int ne, i;
@@ -179,7 +179,9 @@ uint32_t waitForCompletions(unsigned howMany, struct ibv_cq* cq) {
       if(status != IBV_WC_SUCCESS) ERROR("Failed status %s (%d) for wr_id %d\n",
           ibv_wc_status_str(status), status, wr_id)
       completions++;
-      if(wc[i].wc_flags & IBV_WC_WITH_IMM) retval = wc[i].imm_data;
+      if((wc[i].opcode & IBV_WC_RECV) && (wc[i].wc_flags & IBV_WC_WITH_IMM)) {
+        retval = wc[i].imm_data;
+      }
     }
   }
   return retval;
