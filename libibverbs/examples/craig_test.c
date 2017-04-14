@@ -187,6 +187,11 @@ uint32_t waitForCompletions(unsigned howMany, struct ibv_cq* cq) {
   return retval;
 }
 
+struct remote_addr_info {
+  uint64_t remote_addr;
+  uint32_t rkey;
+};
+
 int main(int argc, char* argv[]) {
   struct ibv_device** dev_list;
   struct ibv_device* ibv_dev;
@@ -199,6 +204,8 @@ int main(int argc, char* argv[]) {
 
   char temp;
   bool server;
+  struct ibv_mr *local_mr, *rem_mr;
+  struct remote_addr_info remote_addr_info, local_addr_info;
 
   int page_size = sysconf(_SC_PAGESIZE);
   int* buf = (int*)aligned_alloc(page_size, BUF_SIZE_BYTES);
@@ -219,7 +226,7 @@ int main(int argc, char* argv[]) {
   if(!context) ERROR("Failed to get context for %s\n", ibv_get_device_name(ibv_dev))
   pd = ibv_alloc_pd(context);
   if(!pd) ERROR("Failed to allocate PD\n")
-  mr = ibv_reg_mr(pd, buf, BUF_SIZE_BYTES, IBV_ACCESS_LOCAL_WRITE);
+  mr = ibv_reg_mr(pd, buf, BUF_SIZE_BYTES, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
   if(!mr) ERROR("Failed to register MR\n")
   cq = ibv_create_cq(context, RX_DEPTH + 1, NULL, NULL, 0);
   if(!cq) ERROR("Failed to create CQ\n")
@@ -329,7 +336,7 @@ int main(int argc, char* argv[]) {
       .lkey = mr->lkey
     };
     struct ibv_recv_wr recv_wr = {
-      .wr_id = 1,
+      .wr_id = 3,
       .sg_list = &sge_list,
       .num_sge = 1,
     };
@@ -346,7 +353,7 @@ int main(int argc, char* argv[]) {
       .lkey = mr->lkey
     };
     struct ibv_send_wr send_wr = {
-      .wr_id = 2,
+      .wr_id = 4,
       .sg_list = &sge_list,
       .num_sge = 1,
       .opcode = IBV_WR_SEND_WITH_IMM,
@@ -363,6 +370,97 @@ int main(int argc, char* argv[]) {
     uint32_t imm = waitForCompletions(2, cq);
     for(i = 4; i < 8; i++) {
       int expected_data = server ? CLIENT_DATA+1 : SERVER_DATA+1;
+      if(buf[i] != expected_data) ERROR("Received data 0x%x in position %i; expected 0x%x\n",
+          buf[i], i, expected_data)
+    }
+    if(imm != IMM_DATA) ERROR("Received imm_data %u, expected %u\n", imm, IMM_DATA)
+  }
+
+  // interlude: send address and rkey so the other side can conduct RDMA Write with it
+  local_addr_info.remote_addr = (uintptr_t)buf;
+  local_addr_info.rkey = mr->rkey;
+  local_mr = ibv_reg_mr(pd, &local_addr_info, sizeof(struct remote_addr_info), 0);
+  if(!local_mr) ERROR("Failed to register local MR\n")
+  rem_mr = ibv_reg_mr(pd, &remote_addr_info, sizeof(struct remote_addr_info), IBV_ACCESS_LOCAL_WRITE);
+  if(!rem_mr) ERROR("Failed to register remote MR\n")
+  {
+    struct ibv_sge sge_list = {
+      .addr = (uintptr_t)(&remote_addr_info),
+      .length = sizeof(struct remote_addr_info),
+      .lkey = rem_mr->lkey
+    };
+    struct ibv_recv_wr recv_wr = {
+      .wr_id = 5,
+      .sg_list = &sge_list,
+      .num_sge = 1,
+    };
+    struct ibv_recv_wr* bad_recv_wr;
+    if(ibv_post_recv(qp, &recv_wr, &bad_recv_wr)) ERROR("Failed to post receive\n")
+  }
+  {
+    struct ibv_sge sge_list = {
+      .addr = (uintptr_t)(&local_addr_info),
+      .length = sizeof(struct remote_addr_info),
+      .lkey = local_mr->lkey
+    };
+    struct ibv_send_wr send_wr = {
+      .wr_id = 6,
+      .sg_list = &sge_list,
+      .num_sge = 1,
+      .opcode = IBV_WR_SEND,
+      .send_flags = send_flags,
+    };
+    struct ibv_send_wr* bad_send_wr;
+    if(ibv_post_send(qp, &send_wr, &bad_send_wr)) ERROR("Failed to post send\n")
+  }
+  waitForCompletions(2, cq);
+
+  // next round: inc everything in buffer
+  {
+    int i;
+    for(i = 0; i < BUF_SIZE_BYTES/sizeof(int); i++) {
+      buf[i]++;
+    }
+  }
+
+  // post next receive
+  {
+    struct ibv_recv_wr recv_wr = {
+      .wr_id = 7,
+    };
+    struct ibv_recv_wr* bad_recv_wr;
+    if(ibv_post_recv(qp, &recv_wr, &bad_recv_wr)) ERROR("Failed to post receive\n")
+  }
+
+  // post RDMA Write with immediate
+  {
+    struct ibv_sge sge_list = {
+      .addr = (uintptr_t)buf,
+      .length = 4*sizeof(int),
+      .lkey = mr->lkey
+    };
+    struct ibv_send_wr send_wr = {
+      .wr_id = 8,
+      .sg_list = &sge_list,
+      .num_sge = 1,
+      .opcode = IBV_WR_RDMA_WRITE_WITH_IMM,
+      .send_flags = send_flags,
+      .imm_data = IMM_DATA,
+      .wr.rdma = {
+        .remote_addr = remote_addr_info.remote_addr + 8*sizeof(int),
+        .rkey = remote_addr_info.rkey,
+      }
+    };
+    struct ibv_send_wr* bad_send_wr;
+    if(ibv_post_send(qp, &send_wr, &bad_send_wr)) ERROR("Failed to post send\n")
+  }
+
+  // wait for completions, and confirm correct data received
+  {
+    int i;
+    uint32_t imm = waitForCompletions(2, cq);
+    for(i = 8; i < 12; i++) {
+      int expected_data = server ? CLIENT_DATA+2 : SERVER_DATA+2;
       if(buf[i] != expected_data) ERROR("Received data 0x%x in position %i; expected 0x%x\n",
           buf[i], i, expected_data)
     }
