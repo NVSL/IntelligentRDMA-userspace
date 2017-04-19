@@ -500,6 +500,30 @@ int main(int argc, char* argv[]) {
     }
   }
 
+  // post IRDMA RETURN5
+  {
+    struct ibv_sge sge_list = {
+      .addr = (uintptr_t)(&buf[8]),
+      .length = sizeof(int),
+      .lkey = mr->lkey
+    };
+    struct ibv_send_wr send_wr = {
+      .wr_id = 10,
+      .sg_list = &sge_list,
+      .num_sge = 1,
+      .opcode = 0x10,  // IRDMA_WR_RETURN5
+      .send_flags = send_flags
+    };
+    struct ibv_send_wr* bad_send_wr;
+    if(ibv_post_send(qp, &send_wr, &bad_send_wr)) ERROR("Failed to post RETURN5\n")
+  }
+
+  // wait for completion, and confirm correct data received
+  {
+    waitForCompletions(1, cq);
+    if(buf[8] != 5) ERROR("Received data 0x%x but expected 5\n", buf[8])
+  }
+
   printf("All tests successful.\n");
   return 0;
 }
