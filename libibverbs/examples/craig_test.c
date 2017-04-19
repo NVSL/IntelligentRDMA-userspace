@@ -467,14 +467,6 @@ int main(int argc, char* argv[]) {
     if(imm != IMM_DATA) ERROR("Received imm_data %u, expected %u\n", imm, IMM_DATA)
   }
 
-  // next round: inc everything in buffer
-  {
-    int i;
-    for(i = 0; i < BUF_SIZE_BYTES/sizeof(int); i++) {
-      buf[i]++;
-    }
-  }
-
   // post RDMA Read
   {
     struct ibv_sge sge_list = {
@@ -502,7 +494,7 @@ int main(int argc, char* argv[]) {
     int i;
     waitForCompletions(1, cq);
     for(i = 4; i < 8; i++) {
-      int expected_data = server ? CLIENT_DATA+3 : SERVER_DATA+3;
+      int expected_data = server ? CLIENT_DATA+2 : SERVER_DATA+2;
       if(buf[i] != expected_data) ERROR("Received data 0x%x in position %i; expected 0x%x\n",
           buf[i], i, expected_data)
     }
