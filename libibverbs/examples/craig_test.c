@@ -257,7 +257,7 @@ int main(int argc, char* argv[]) {
       .qp_state = IBV_QPS_INIT,
       .pkey_index = 0,
       .port_num = IB_PORT,
-      .qp_access_flags = 0
+      .qp_access_flags = IBV_ACCESS_REMOTE_WRITE
     };
     if(ibv_modify_qp(qp, &attr, IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS)) ERROR("Failed to modify QP to INIT\n")
   }
