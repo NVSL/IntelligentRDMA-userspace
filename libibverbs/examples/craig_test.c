@@ -226,7 +226,7 @@ int main(int argc, char* argv[]) {
   if(!context) ERROR("Failed to get context for %s\n", ibv_get_device_name(ibv_dev))
   pd = ibv_alloc_pd(context);
   if(!pd) ERROR("Failed to allocate PD\n")
-  mr = ibv_reg_mr(pd, buf, BUF_SIZE_BYTES, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+  mr = ibv_reg_mr(pd, buf, BUF_SIZE_BYTES, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
   if(!mr) ERROR("Failed to register MR\n")
   cq = ibv_create_cq(context, RX_DEPTH + 1, NULL, NULL, 0);
   if(!cq) ERROR("Failed to create CQ\n")
@@ -257,7 +257,7 @@ int main(int argc, char* argv[]) {
       .qp_state = IBV_QPS_INIT,
       .pkey_index = 0,
       .port_num = IB_PORT,
-      .qp_access_flags = IBV_ACCESS_REMOTE_WRITE
+      .qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ
     };
     if(ibv_modify_qp(qp, &attr, IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS)) ERROR("Failed to modify QP to INIT\n")
   }
