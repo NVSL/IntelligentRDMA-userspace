@@ -467,6 +467,47 @@ int main(int argc, char* argv[]) {
     if(imm != IMM_DATA) ERROR("Received imm_data %u, expected %u\n", imm, IMM_DATA)
   }
 
+  // next round: inc everything in buffer
+  {
+    int i;
+    for(i = 0; i < BUF_SIZE_BYTES/sizeof(int); i++) {
+      buf[i]++;
+    }
+  }
+
+  // post RDMA Read
+  {
+    struct ibv_sge sge_list = {
+      .addr = (uintptr_t)(&buf[4]),
+      .length = 4*sizeof(int),
+      .lkey = mr->lkey
+    };
+    struct ibv_send_wr send_wr = {
+      .wr_id = 9,
+      .sg_list = &sge_list,
+      .num_sge = 1,
+      .opcode = IBV_WR_RDMA_READ,
+      .send_flags = send_flags,
+      .wr.rdma = {
+        .remote_addr = remote_addr_info.remote_addr,
+        .rkey = remote_addr_info.rkey,
+      }
+    };
+    struct ibv_send_wr* bad_send_wr;
+    if(ibv_post_send(qp, &send_wr, &bad_send_wr)) ERROR("Failed to post send\n")
+  }
+
+  // wait for completion, and confirm correct data received
+  {
+    int i;
+    waitForCompletions(1, cq);
+    for(i = 4; i < 8; i++) {
+      int expected_data = server ? CLIENT_DATA+3 : SERVER_DATA+3;
+      if(buf[i] != expected_data) ERROR("Received data 0x%x in position %i; expected 0x%x\n",
+          buf[i], i, expected_data)
+    }
+  }
+
   printf("All tests successful.\n");
   return 0;
 }
